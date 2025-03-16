@@ -74,8 +74,8 @@ inline std::string ToString(const UInt256& value) {
 
     std::string result;
     UInt256 num = value;
-    
-    while (num.first.first != 0 || num.first.second != 0 || 
+
+    while (num.first.first != 0 || num.first.second != 0 ||
            num.second.first != 0 || num.second.second != 0) {
         // Calculate remainder when divided by 10
         UInt256 quotient;
@@ -84,21 +84,21 @@ inline std::string ToString(const UInt256& value) {
         quotient.second.first = 0;
         quotient.second.second = 0;
         uint64_t carry = 0;
-        
+
         // Process from high to low, 64 bits at a time
         uint64_t remainder = num.first.first % 10;
         quotient.first.first = num.first.first / 10;
-        
+
         carry = remainder;
         uint64_t temp = (carry << 64) | num.first.second;
         remainder = temp % 10;
         quotient.first.second = temp / 10;
-        
+
         carry = remainder;
         temp = (carry << 64) | num.second.first;
         remainder = temp % 10;
         quotient.second.first = temp / 10;
-        
+
         carry = remainder;
         temp = (carry << 64) | num.second.second;
         remainder = temp % 10;
@@ -120,32 +120,28 @@ inline std::string ToString(const Int256& value) {
     bool is_negative = value.first < 0;
     Int256 abs_value;
 
-    // Handle negative numbers using two's complement
+    // Handle negative numbers by negating both parts
     if (is_negative) {
-        if (value.second == 0) {
-            abs_value = {-value.first, 0};
-        } else {
-            // Need to handle borrow
-            abs_value.first = -(value.first + 1);
-            abs_value.second = -value.second;
-        }
+        abs_value.first = -value.first;
+        abs_value.second = -value.second-1;
     } else {
         abs_value = value;
     }
 
     std::string result;
     Int256 num = abs_value;
-    
+
+    // Use the same division algorithm as UInt256 for consistency
     while (num.first != 0 || num.second != 0) {
         Int256 quotient;
-        quotient.first = absl::MakeInt128(0, 0);
-        quotient.second = absl::MakeInt128(0, 0);
+        quotient.first = 0;
+        quotient.second = 0;
         uint64_t carry = 0;
-        
+
         // Process from high to low, treating as unsigned for division
         uint64_t* ptr = reinterpret_cast<uint64_t*>(&num);
         uint64_t* qptr = reinterpret_cast<uint64_t*>(&quotient);
-        
+
         for (int i = 3; i >= 0; --i) {
             uint64_t temp;
             if (i == 3) {
@@ -173,7 +169,7 @@ inline UInt128 ParseUInt128(const std::string& str) {
         return {0, std::stoull(str)};
     }
     size_t split = str.length() - 20;
-    return {std::stoull(str.substr(0, split)), 
+    return {std::stoull(str.substr(0, split)),
             std::stoull(str.substr(split))};
 }
 
@@ -181,7 +177,7 @@ inline UInt128 ParseUInt128(const std::string& str) {
 inline Int128 ParseInt128(const std::string& str) {
     bool is_negative = str[0] == '-';
     std::string abs_str = is_negative ? str.substr(1) : str;
-    
+
     Int128 result;
     if (abs_str.length() <= 20) {
         result = Int128(std::stoull(abs_str));
@@ -189,11 +185,11 @@ inline Int128 ParseInt128(const std::string& str) {
         size_t split = abs_str.length() - 20;
         uint64_t high = std::stoull(abs_str.substr(0, split));
         uint64_t low = std::stoull(abs_str.substr(split));
-        
+
         // Combine high and low parts
         result = absl::MakeInt128(high, low);
     }
-    
+
     return is_negative ? -result : result;
 }
 
@@ -211,7 +207,7 @@ inline UInt256 ParseUInt256(const std::string& str) {
 inline Int256 ParseInt256(const std::string& str) {
     bool is_negative = str[0] == '-';
     std::string abs_str = is_negative ? str.substr(1) : str;
-    
+
     Int256 result;
     if (abs_str.length() <= 40) {
         result = {Int128(0), ParseInt128(abs_str)};
@@ -220,7 +216,7 @@ inline Int256 ParseInt256(const std::string& str) {
         result = {ParseInt128(abs_str.substr(0, split)),
                  ParseInt128(abs_str.substr(split))};
     }
-    
+
     if (is_negative) {
         // Convert to two's complement for negative numbers
         if (result.second == 0) {
@@ -233,4 +229,4 @@ inline Int256 ParseInt256(const std::string& str) {
     return result;
 }
 
-}  // namespace clickhouse 
+}  // namespace clickhouse
