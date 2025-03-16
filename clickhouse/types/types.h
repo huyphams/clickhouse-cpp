@@ -13,10 +13,9 @@ namespace clickhouse {
 
 using Int128 = absl::int128;
 using Int64 = int64_t;
-using UInt128 = std::pair<uint64_t, uint64_t>;
+using UInt128 = absl::uint128;
 using UInt256 = std::pair<UInt128, UInt128>;
 using Int256 = std::pair<Int128, Int128>;
-using UUID = UInt128;
 
 using TypeRef = std::shared_ptr<class Type>;
 
