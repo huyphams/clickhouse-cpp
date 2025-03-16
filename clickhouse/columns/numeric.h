@@ -76,6 +76,8 @@ using ColumnInt16   = ColumnVector<int16_t>;
 using ColumnInt32   = ColumnVector<int32_t>;
 using ColumnInt64   = ColumnVector<int64_t>;
 using ColumnInt128  = ColumnVector<Int128>;
+using ColumnInt256 = ColumnVector<Int256>;
+using ColumnUInt256 = ColumnVector<UInt256>;
 
 using ColumnFloat32 = ColumnVector<float>;
 using ColumnFloat64 = ColumnVector<double>;

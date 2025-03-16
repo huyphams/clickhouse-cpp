@@ -7,10 +7,17 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <type_traits>
 
 namespace clickhouse {
 
 using Int64 = int64_t;
+
+// Raw little-endian two's-complement wire values; preserve new_int's byte API.
+struct UInt256 { unsigned char bytes[32] = {}; };
+struct Int256 { unsigned char bytes[32] = {}; };
+static_assert(sizeof(UInt256) == 32 && sizeof(Int256) == 32);
+static_assert(std::is_trivially_copyable_v<UInt256> && std::is_trivially_copyable_v<Int256>);
 
 using TypeRef = std::shared_ptr<class Type>;
 
@@ -58,6 +65,8 @@ public:
         Time64,
         JSON,
         Bool,
+        Int256,
+        UInt256,
     };
 
     using EnumItem = std::pair<std::string /* name */, int16_t /* value */>;
@@ -406,5 +415,10 @@ template <>
 inline TypeRef Type::CreateSimple<double>() {
     return TypeRef(new Type(Float64));
 }
+
+template <>
+inline TypeRef Type::CreateSimple<Int256>() { return TypeRef(new Type(Int256)); }
+template <>
+inline TypeRef Type::CreateSimple<UInt256>() { return TypeRef(new Type(UInt256)); }
 
 }  // namespace clickhouse
