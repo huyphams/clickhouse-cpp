@@ -56,6 +56,8 @@ static ColumnRef CreateTerminalColumn(const TypeAst& ast) {
         return std::make_shared<ColumnUInt32>();
     case Type::UInt64:
         return std::make_shared<ColumnUInt64>();
+    case Type::UInt128:
+        return std::make_shared<ColumnUInt128>();
 
     case Type::Int8:
         return std::make_shared<ColumnInt8>();

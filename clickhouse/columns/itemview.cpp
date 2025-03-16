@@ -83,6 +83,7 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::IPv6:
         case Type::Code::UUID:
         case Type::Code::Int128:
+        case Type::Code::UInt128:
         case Type::Code::Decimal128:
             return AssertSize({16});
 

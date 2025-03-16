@@ -13,6 +13,8 @@ namespace clickhouse {
 
 using Int128 = absl::int128;
 using Int64 = int64_t;
+using UInt128 = std::pair<uint64_t, uint64_t>;
+using UUID = UInt128;
 
 using TypeRef = std::shared_ptr<class Type>;
 
@@ -43,6 +45,7 @@ public:
         IPv4,
         IPv6,
         Int128,
+        UInt128,
         Decimal,
         Decimal32,
         Decimal64,
@@ -337,6 +340,11 @@ inline TypeRef Type::CreateSimple<int64_t>() {
 template <>
 inline TypeRef Type::CreateSimple<Int128>() {
     return TypeRef(new Type(Int128));
+}
+
+template <>
+inline TypeRef Type::CreateSimple<UInt128>() {
+    return TypeRef(new Type(UInt128));
 }
 
 template <>

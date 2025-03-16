@@ -80,7 +80,7 @@ TEST(TypesCase, IsEqual) {
     const std::string type_names[] = {
         "UInt8",
         "Int8",
-//        "UInt128",
+        "UInt128",
         "String",
         "FixedString(0)",
         "FixedString(10000)",

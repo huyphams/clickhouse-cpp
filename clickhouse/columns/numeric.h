@@ -83,4 +83,6 @@ using ColumnInt128  = ColumnVector<Int128>;
 using ColumnFloat32 = ColumnVector<float>;
 using ColumnFloat64 = ColumnVector<double>;
 
+using ColumnUInt128 = ColumnVector<UInt128>;
+
 }
