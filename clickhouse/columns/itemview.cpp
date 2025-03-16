@@ -87,6 +87,10 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::Decimal128:
             return AssertSize({16});
 
+        case Type::Code::Int256:
+        case Type::Code::UInt256:
+            return AssertSize({32});
+
         case Type::Code::Decimal:
             // Could be either Decimal32, Decimal64 or Decimal128
             return AssertSize({4, 8, 16});

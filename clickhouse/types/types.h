@@ -14,6 +14,8 @@ namespace clickhouse {
 using Int128 = absl::int128;
 using Int64 = int64_t;
 using UInt128 = std::pair<uint64_t, uint64_t>;
+using UInt256 = std::pair<UInt128, UInt128>;
+using Int256 = std::pair<Int128, Int128>;
 using UUID = UInt128;
 
 using TypeRef = std::shared_ptr<class Type>;
@@ -46,6 +48,8 @@ public:
         IPv6,
         Int128,
         UInt128,
+        Int256,
+        UInt256,
         Decimal,
         Decimal32,
         Decimal64,
@@ -375,6 +379,16 @@ inline TypeRef Type::CreateSimple<float>() {
 template <>
 inline TypeRef Type::CreateSimple<double>() {
     return TypeRef(new Type(Float64));
+}
+
+template <>
+inline TypeRef Type::CreateSimple<Int256>() {
+    return TypeRef(new Type(Int256));
+}
+
+template <>
+inline TypeRef Type::CreateSimple<UInt256>() {
+    return TypeRef(new Type(UInt256));
 }
 
 }  // namespace clickhouse

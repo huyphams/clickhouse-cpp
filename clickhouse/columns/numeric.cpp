@@ -119,6 +119,8 @@ template class ColumnVector<uint32_t>;
 template class ColumnVector<uint64_t>;
 template class ColumnVector<Int128>;
 template class ColumnVector<UInt128>;
+template class ColumnVector<Int256>;
+template class ColumnVector<UInt256>;
 
 template class ColumnVector<float>;
 template class ColumnVector<double>;

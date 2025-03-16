@@ -40,6 +40,8 @@ const char* Type::TypeName(Type::Code code) {
         case Type::Code::IPv4:           return "IPv4";
         case Type::Code::IPv6:           return "IPv6";
         case Type::Code::Int128:         return "Int128";
+        case Type::Code::Int256:         return "Int256";
+        case Type::Code::UInt256:        return "UInt256";
         case Type::Code::Decimal:        return "Decimal";
         case Type::Code::Decimal32:      return "Decimal32";
         case Type::Code::Decimal64:      return "Decimal64";
@@ -65,11 +67,13 @@ std::string Type::GetName() const {
         case Int32:
         case Int64:
         case Int128:
+        case Int256:
         case UInt8:
         case UInt16:
         case UInt32:
         case UInt64:
         case UInt128:
+        case UInt256:
         case UUID:
         case Float32:
         case Float64:
@@ -124,11 +128,13 @@ uint64_t Type::GetTypeUniqueId() const {
         case Int32:
         case Int64:
         case Int128:
+        case Int256:
         case UInt8:
         case UInt16:
         case UInt32:
         case UInt64:
         case UInt128:
+        case UInt256:
         case UUID:
         case Float32:
         case Float64:

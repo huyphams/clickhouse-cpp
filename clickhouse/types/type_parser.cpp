@@ -55,6 +55,8 @@ static const std::unordered_map<std::string, Type::Code> kTypeCode = {
     { "IPv6",        Type::IPv6 },
     { "Int128",      Type::Int128 },
     { "UInt128",     Type::UInt128 },
+    { "Int256",      Type::Int256 },
+    { "UInt256",     Type::UInt256 },
     { "Decimal",     Type::Decimal },
     { "Decimal32",   Type::Decimal32 },
     { "Decimal64",   Type::Decimal64 },
