@@ -11,171 +11,196 @@ namespace clickhouse {
 
 // Convert Int128 to string representation
 inline std::string ToString(const Int128& value) {
-    std::stringstream ss;
+  std::stringstream ss;
 
-    // Special handling for minimum value since -min == min for two's complement
-    if (value == std::numeric_limits<Int128>::min()) {
-        // Handle minimum value by converting it digit by digit
-        // Get absolute value by parts to avoid overflow
-        uint64_t high = absl::Int128High64(value);
-        uint64_t low = absl::Int128Low64(value);
+  // Special handling for minimum value since -min == min for two's complement
+  if (value == std::numeric_limits<Int128>::min()) {
+    // Handle minimum value by converting it digit by digit
+    // Get absolute value by parts to avoid overflow
+    uint64_t high = absl::Int128High64(value);
+    uint64_t low = absl::Int128Low64(value);
 
-        // Convert to positive parts and handle manually
-        high = ~high;  // Bitwise NOT for the high part
-        low = ~low + 1;  // Add 1 to complete two's complement
-        if (low == 0) {  // Handle carry
-            high += 1;
-        }
-
-        // Now we have the magnitude in high:low parts
-        UInt128 magnitude = absl::MakeUint128(high, low);
-        ss << "-" << magnitude;
-    } else if (value < 0) {
-        ss << "-" << -value;
-    } else {
-        ss << value;
+    // Convert to positive parts and handle manually
+    high = ~high;  // Bitwise NOT for the high part
+    low = ~low + 1;  // Add 1 to complete two's complement
+    if (low == 0) {  // Handle carry
+      high += 1;
     }
-    return ss.str();
+
+    // Now we have the magnitude in high:low parts
+    UInt128 magnitude = absl::MakeUint128(high, low);
+    ss << "-" << magnitude;
+  } else if (value < 0) {
+    ss << "-" << -value;
+  } else {
+    ss << value;
+  }
+  return ss.str();
 }
 
 // Convert UInt128 to string representation
 inline std::string ToString(const UInt128& value) {
-    std::stringstream ss;
-    ss << value;
-    return ss.str();
+  std::stringstream ss;
+  ss << value;
+  return ss.str();
 }
 
-// Convert Int128 to hexadecimal string representation
-inline std::string ToHexString(const Int128& value) {
-    std::stringstream ss;
-    ss << "0x" << std::hex << std::uppercase;
 
-    // Get high and low 64-bit parts
-    uint64_t high = absl::Int128High64(value);
-    uint64_t low = absl::Int128Low64(value);
+// Function to convert bytes to a reversed hex string
+std::string ubytesToHexString(const unsigned char* bytes, int length) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
 
-    // Print high part only if non-zero
-    if (high != 0 || value < 0) {
-        ss << std::setfill('0') << std::setw(16) << high;
+    // Iterate in reverse order to reverse byte order
+    for (int i = 0; i < length; ++i) {
+        oss << std::setw(2) << static_cast<int>(bytes[length - 1 - i]);
     }
-    ss << std::setfill('0') << std::setw(16) << low;
 
-    return ss.str();
+    return oss.str();
 }
 
-// Convert UInt128 to hexadecimal string representation
-inline std::string ToHexString(const UInt128& value) {
-    std::stringstream ss;
-    ss << "0x" << std::hex << std::uppercase;
-
-    // Get high and low 64-bit parts
-    uint64_t high = absl::Uint128High64(value);
-    uint64_t low = absl::Uint128Low64(value);
-
-    // Print high part only if non-zero
-    if (high != 0) {
-        ss << std::setfill('0') << std::setw(16) << high;
-    }
-    ss << std::setfill('0') << std::setw(16) << low;
-
-    return ss.str();
-}
-
-// Convert Int256 to string representation
-inline std::string ToString(const Int256& value) {
-    // Check if it's just the low part
-    if (value.first == 0) {
-        return ToString(value.second);
-    }
-
-    bool is_negative = value.first < 0;
-    Int256 abs_value;
-
-    // Handle negative numbers by negating both parts
-    if (is_negative) {
-        abs_value.first = -value.first;
-        abs_value.second = -value.second-1;
-    } else {
-        abs_value = value;
-    }
-
+std::string umultiplyLargeNumbers(std::string a, int b) {
     std::string result;
-    Int256 num = abs_value;
+    int carry = 0;
 
-    // Use the same division algorithm as UInt256 for consistency
-    while (num.first != 0 || num.second != 0) {
-        Int256 quotient;
-        quotient.first = 0;
-        quotient.second = 0;
-        uint64_t carry = 0;
+    // Use size_t to avoid implicit conversion warnings
+    for (int i = (int)a.length(); i > 0; --i) {
+        int product = (a[i - 1] - '0') * b + carry;
+        carry = product / 10;
+        result.insert(result.begin(), (product % 10) + '0');
+    }
 
-        // Process from high to low, treating as unsigned for division
-        uint64_t* ptr = reinterpret_cast<uint64_t*>(&num);
-        uint64_t* qptr = reinterpret_cast<uint64_t*>(&quotient);
+    // Add remaining carry
+    while (carry > 0) {
+        result.insert(result.begin(), (carry % 10) + '0');
+        carry /= 10;
+    }
 
-        for (int i = 3; i >= 0; --i) {
-            uint64_t temp;
-            if (i == 3) {
-                temp = ptr[i];
+    return result;
+}
+
+std::string uaddLargeNumbers(std::string a, std::string b) {
+    std::string result;
+    int carry = 0;
+
+    size_t i = a.length(), j = b.length();
+
+    // Add digits from right to left
+    while (i > 0 || j > 0 || carry > 0) {
+        int digitA = (i > 0) ? (a[--i] - '0') : 0;
+        int digitB = (j > 0) ? (b[--j] - '0') : 0;
+
+        int sum = digitA + digitB + carry;
+        carry = sum / 10;
+        result.insert(result.begin(), (sum % 10) + '0');
+    }
+
+    return result;
+}
+
+// Function to convert a large hex string to decimal
+std::string uhexToNumeric(const std::string& hexString) {
+    std::string decimalValue = "0";
+
+    // Process each hex digit
+    for (char hexDigit : hexString) {
+        int num;
+        if (hexDigit >= '0' && hexDigit <= '9') num = hexDigit - '0';
+        else if (hexDigit >= 'a' && hexDigit <= 'f') num = hexDigit - 'a' + 10;
+        else if (hexDigit >= 'A' && hexDigit <= 'F') num = hexDigit - 'A' + 10;
+        else continue; // Ignore invalid chars
+
+        // Multiply current decimal value by 16 (shift left in base-10)
+        decimalValue = umultiplyLargeNumbers(decimalValue, 16);
+
+        // Add current hex digit to decimal value
+        decimalValue = uaddLargeNumbers(decimalValue, std::to_string(num));
+    }
+
+    return decimalValue;
+}
+
+// Convert Int256 to a hex string with sign
+inline std::string ToString(const UInt256 &value) {
+  return uhexToNumeric(ubytesToHexString(value.bytes, 32));
+}
+
+// Function to convert bytes to a reversed hex string
+std::string bytesToHexString(const unsigned char* bytes, size_t length) {
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+
+    // Iterate in reverse order to reverse byte order (little-endian to big-endian)
+    for (size_t i = 0; i < length; ++i) {
+        oss << std::setw(2) << static_cast<int>(bytes[length - 1 - i]);
+    }
+
+    return oss.str();
+}
+
+// Function to compute two's complement for negative numbers
+std::string twosComplement(const std::string& hexString) {
+    std::string complement;
+    bool carry = true;  // Start with +1 for two's complement
+
+    // Iterate from the rightmost digit to the left
+    for (int i = (int)hexString.length() - 1; i >= 0; --i) {
+        char hexDigit = hexString[i];
+
+        // Convert hex digit to integer, invert bits
+        int num;
+        if (hexDigit >= '0' && hexDigit <= '9') num = 15 - (hexDigit - '0');
+        else if (hexDigit >= 'a' && hexDigit <= 'f') num = 15 - (hexDigit - 'a' + 10);
+        else if (hexDigit >= 'A' && hexDigit <= 'F') num = 15 - (hexDigit - 'A' + 10);
+        else continue;
+
+        // Add 1 for two’s complement
+        if (carry) {
+            num += 1;
+            if (num == 16) {
+                num = 0;
+                carry = true;
             } else {
-                temp = (carry << 64) | ptr[i];
+                carry = false;
             }
-            carry = temp % 10;
-            qptr[i] = temp / 10;
         }
 
-        result = static_cast<char>('0' + carry) + result;
-        num = quotient;
+        // Convert back to hex character
+        if (num < 10) complement.insert(complement.begin(), '0' + num);
+        else complement.insert(complement.begin(), 'a' + (num - 10));
     }
 
-    if (result.empty()) {
-        result = "0";
-    }
-    return is_negative ? "-" + result : result;
+    return complement;
 }
 
-// Convert UInt256 to string representation
-inline std::string ToString(const UInt256& value) {
-    std::stringstream ss;
-    const auto& [high, low] = value;
+// Function to convert a large hex string to decimal (handling signed values)
+std::string hexToNumeric(const std::string& hexString) {
+    bool isNegative = (hexString[0] >= '8');  // Check MSB for signed value
 
-    ss << ToString(high);
-    if (low > 0) {
-        ss << std::setfill('0') << std::setw(38) << ToString(low);
+    std::string decimalValue = "0";
+    std::string hexToConvert = isNegative ? twosComplement(hexString) : hexString;
+
+    // Convert hex to decimal
+    for (char hexDigit : hexToConvert) {
+        int num;
+        if (hexDigit >= '0' && hexDigit <= '9') num = hexDigit - '0';
+        else if (hexDigit >= 'a' && hexDigit <= 'f') num = hexDigit - 'a' + 10;
+        else if (hexDigit >= 'A' && hexDigit <= 'F') num = hexDigit - 'A' + 10;
+        else continue;
+
+        // Multiply current decimal value by 16
+        decimalValue = std::to_string(std::stoull(decimalValue) * 16);
+
+        // Add current hex digit
+        decimalValue = std::to_string(std::stoull(decimalValue) + num);
     }
-    return ss.str();
+
+    return isNegative ? "-" + decimalValue : decimalValue;
 }
 
-// Convert Int256 to hexadecimal string representation
-inline std::string ToHexString(const Int256& value) {
-    std::stringstream ss;
-    const auto& [high, low] = value;  // high is Int128, low is UInt128
-
-    ss << "0x" << std::hex << std::uppercase;
-
-    // For Int256, always show full representation
-    std::string high_hex = ToHexString(high).substr(2);  // Remove "0x" prefix
-    std::string low_hex = ToHexString(low).substr(2);   // Remove "0x" prefix
-
-    // Ensure both parts are properly padded
-    ss << std::setfill('0') << std::setw(32) << high_hex;
-    ss << std::setfill('0') << std::setw(32) << low_hex;
-
-    return ss.str();
-}
-
-// Convert UInt256 to hexadecimal string representation
-inline std::string ToHexString(const UInt256& value) {
-    std::stringstream ss;
-    const auto& [high, low] = value;
-
-    ss << "0x" << std::hex << std::uppercase;
-    if (high > 0) {
-        ss << ToHexString(high).substr(2);  // Remove "0x" prefix from high part
-    }
-    ss << std::setfill('0') << std::setw(32) << ToHexString(low).substr(2);  // Remove "0x" prefix from low part
-
-    return ss.str();
+// Convert Int256 to a hex string with sign
+inline std::string ToString(const Int256 &value) {
+  return hexToNumeric(bytesToHexString(value.bytes, 32));
 }
 
 } // namespace clickhouse
