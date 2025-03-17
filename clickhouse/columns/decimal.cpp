@@ -1,5 +1,6 @@
 #include "decimal.h"
 #include "clickhouse/exceptions.h"
+#include "clickhouse/types/type_utils.h"
 
 #include <algorithm>
 #include <iterator>
@@ -64,12 +65,17 @@ namespace clickhouse {
 ColumnDecimal::ColumnDecimal(size_t precision, size_t scale)
     : Column(Type::CreateDecimal(precision, scale))
 {
+    if (precision == 0 || precision > 76 || scale > precision) {
+        throw ValidationError("Decimal requires 1 <= precision <= 76 and scale <= precision");
+    }
     if (precision <= 9) {
         data_ = std::make_shared<ColumnInt32>();
     } else if (precision <= 18) {
         data_ = std::make_shared<ColumnInt64>();
-    } else {
+    } else if (precision <= 38) {
         data_ = std::make_shared<ColumnInt128>();
+    } else {
+        data_ = std::make_shared<ColumnInt256>();
     }
     data_type_code_ = data_->Type()->GetCode();
 }
@@ -89,9 +95,22 @@ void ColumnDecimal::Append(const Int128& value) {
         case Type::Int64:
             static_cast<ColumnInt64*>(data_.get())->Append(static_cast<int64_t>(Bignum::Int128Low64(value)));
             break;
-        default:
-            static_cast<ColumnInt128*>(data_.get())->Append(static_cast<Int128>(value));
+        case Type::Int128:
+            static_cast<ColumnInt128*>(data_.get())->Append(value);
             break;
+        case Type::Int256:
+            static_cast<ColumnInt256*>(data_.get())->Append(Int256FromInt128(value));
+            break;
+        default:
+            throw ValidationError("Invalid data_ column type in ColumnDecimal");
+    }
+}
+
+void ColumnDecimal::Append(const Int256& value) {
+    if (data_type_code_ == Type::Int256) {
+        static_cast<ColumnInt256*>(data_.get())->Append(value);
+    } else {
+        Append(Int256ToInt128(value));
     }
 }
 
@@ -142,7 +161,11 @@ void ColumnDecimal::Append(const std::string& value) {
         }
     }
 
-    Append(Bignum::StringToInt128(cleaned));
+    if (data_type_code_ == Type::Int256) {
+        Append(Int256FromString(cleaned));
+    } else {
+        Append(Bignum::StringToInt128(cleaned));
+    }
 }
 
 Int128 ColumnDecimal::At(size_t i) const {
@@ -153,9 +176,18 @@ Int128 ColumnDecimal::At(size_t i) const {
             return static_cast<Int128>(static_cast<const ColumnInt64*>(data_.get())->At(i));
         case Type::Int128:
             return static_cast<const ColumnInt128*>(data_.get())->At(i);
+        case Type::Int256:
+            return Int256ToInt128(static_cast<const ColumnInt256*>(data_.get())->At(i));
         default:
             throw ValidationError("Invalid data_ column type in ColumnDecimal");
     }
+}
+
+Int256 ColumnDecimal::At256(size_t i) const {
+    if (data_type_code_ == Type::Int256) {
+        return static_cast<const ColumnInt256*>(data_.get())->At(i);
+    }
+    return Int256FromInt128(At(i));
 }
 
 Int128 ColumnDecimal::operator[](size_t i) const {
@@ -165,8 +197,8 @@ Int128 ColumnDecimal::operator[](size_t i) const {
 std::string ColumnDecimal::StringAt(size_t i) const {
     auto scale = GetScale();
 
-    Int128 val = At(i);
-    std::string raw_str = Bignum::Int128ToString(val);
+    std::string raw_str = data_type_code_ == Type::Int256
+        ? ToString(At256(i)) : Bignum::Int128ToString(At(i));
     if (scale == 0) {
         return raw_str;
     }

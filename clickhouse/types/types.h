@@ -67,6 +67,7 @@ public:
         Bool,
         Int256,
         UInt256,
+        Decimal256,
     };
 
     using EnumItem = std::pair<std::string /* name */, int16_t /* value */>;

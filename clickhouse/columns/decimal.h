@@ -16,6 +16,10 @@ public:
 
     CH_ABSEIL_BIGNUM_DEPRECATED void Append(const Int128& value);
     void Append(const std::string& value);
+    void Append(const Int256& value);
+
+    // Full-width raw scaled value. At() throws if a Decimal256 exceeds Int128.
+    Int256 At256(size_t i) const;
 
     CH_ABSEIL_BIGNUM_DEPRECATED Int128 At(size_t i) const;
     CH_ABSEIL_BIGNUM_DEPRECATED Int128 operator[](size_t i) const;
@@ -44,6 +48,7 @@ private:
     ///  - ColumnInt32
     ///  - ColumnInt64
     ///  - ColumnInt128
+    ///  - ColumnInt256
     ColumnRef data_;
     Type::Code data_type_code_;
 
