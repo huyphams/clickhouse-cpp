@@ -12,29 +12,7 @@ namespace clickhouse {
 // Convert Int128 to string representation
 inline std::string ToString(const Int128& value) {
   std::stringstream ss;
-
-  // Special handling for minimum value since -min == min for two's complement
-  if (value == std::numeric_limits<Int128>::min()) {
-    // Handle minimum value by converting it digit by digit
-    // Get absolute value by parts to avoid overflow
-    uint64_t high = absl::Int128High64(value);
-    uint64_t low = absl::Int128Low64(value);
-
-    // Convert to positive parts and handle manually
-    high = ~high;  // Bitwise NOT for the high part
-    low = ~low + 1;  // Add 1 to complete two's complement
-    if (low == 0) {  // Handle carry
-      high += 1;
-    }
-
-    // Now we have the magnitude in high:low parts
-    UInt128 magnitude = absl::MakeUint128(high, low);
-    ss << "-" << magnitude;
-  } else if (value < 0) {
-    ss << "-" << -value;
-  } else {
-    ss << value;
-  }
+  ss << value;
   return ss.str();
 }
 
@@ -154,7 +132,7 @@ std::string twosComplement(const std::string& hexString) {
         else if (hexDigit >= 'A' && hexDigit <= 'F') num = 15 - (hexDigit - 'A' + 10);
         else continue;
 
-        // Add 1 for two’s complement
+        // Add 1 for two's complement
         if (carry) {
             num += 1;
             if (num == 16) {
@@ -180,19 +158,19 @@ std::string hexToNumeric(const std::string& hexString) {
     std::string decimalValue = "0";
     std::string hexToConvert = isNegative ? twosComplement(hexString) : hexString;
 
-    // Convert hex to decimal
+    // Process each hex digit
     for (char hexDigit : hexToConvert) {
         int num;
         if (hexDigit >= '0' && hexDigit <= '9') num = hexDigit - '0';
         else if (hexDigit >= 'a' && hexDigit <= 'f') num = hexDigit - 'a' + 10;
         else if (hexDigit >= 'A' && hexDigit <= 'F') num = hexDigit - 'A' + 10;
-        else continue;
+        else continue; // Ignore invalid chars
 
-        // Multiply current decimal value by 16
-        decimalValue = std::to_string(std::stoull(decimalValue) * 16);
+        // Multiply current decimal value by 16 (shift left in base-10)
+        decimalValue = umultiplyLargeNumbers(decimalValue, 16);
 
-        // Add current hex digit
-        decimalValue = std::to_string(std::stoull(decimalValue) + num);
+        // Add current hex digit to decimal value
+        decimalValue = uaddLargeNumbers(decimalValue, std::to_string(num));
     }
 
     return isNegative ? "-" + decimalValue : decimalValue;
