@@ -134,6 +134,16 @@ TEST(TypeParserCase, ParseDecimal128) {
     ASSERT_EQ(ast.elements[0].value, 3);
 }
 
+TEST(TypeParserCase, ParseDecimal256) {
+    TypeAst ast;
+    TypeParser("Decimal256(5)").Parse(&ast);
+    ASSERT_EQ(ast.meta, TypeAst::Terminal);
+    ASSERT_EQ(ast.name, "Decimal256");
+    ASSERT_EQ(ast.code, Type::Decimal256);
+    ASSERT_EQ(ast.elements.size(), 1u);
+    ASSERT_EQ(ast.elements[0].value, 5);
+}
+
 TEST(TypeParserCase, ParseDateTime_NO_TIMEZONE) {
     TypeAst ast;
     TypeParser("DateTime").Parse(&ast);

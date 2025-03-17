@@ -106,8 +106,10 @@ ColumnDecimal::ColumnDecimal(size_t precision, size_t scale)
         data_ = std::make_shared<ColumnInt32>();
     } else if (precision <= 18) {
         data_ = std::make_shared<ColumnInt64>();
-    } else {
+    } else if (precision <= 38) {
         data_ = std::make_shared<ColumnInt128>();
+    } else {
+        data_ = std::make_shared<ColumnInt256>();
     }
 }
 
@@ -122,8 +124,23 @@ void ColumnDecimal::Append(const Int128& value) {
         data_->As<ColumnInt32>()->Append(static_cast<ColumnInt32::DataType>(value));
     } else if (data_->Type()->GetCode() == Type::Int64) {
         data_->As<ColumnInt64>()->Append(static_cast<ColumnInt64::DataType>(value));
-    } else {
+    } else if (data_->Type()->GetCode() == Type::Int128) {
         data_->As<ColumnInt128>()->Append(static_cast<ColumnInt128::DataType>(value));
+    } else {
+        // For Int256, we need to convert Int128 to Int256
+        Int256 int256_value;
+        std::memset(int256_value.bytes, 0, sizeof(int256_value.bytes));
+        
+        // Handle negative values by sign-extending
+        if (value < 0) {
+            std::memset(int256_value.bytes, 0xFF, sizeof(int256_value.bytes));
+        }
+        
+        // Copy the Int128 value to the lower 16 bytes of Int256
+        const unsigned char* value_bytes = reinterpret_cast<const unsigned char*>(&value);
+        std::memcpy(int256_value.bytes, value_bytes, sizeof(Int128));
+        
+        data_->As<ColumnInt256>()->Append(int256_value);
     }
 }
 
@@ -186,6 +203,13 @@ Int128 ColumnDecimal::At(size_t i) const {
             return static_cast<Int128>(data_->As<ColumnInt64>()->At(i));
         case Type::Int128:
             return data_->As<ColumnInt128>()->At(i);
+        case Type::Int256: {
+            // Convert Int256 to Int128 (may lose precision)
+            const Int256& value = data_->As<ColumnInt256>()->At(i);
+            Int128 result;
+            std::memcpy(&result, value.bytes, sizeof(Int128));
+            return result;
+        }
         default:
             throw ValidationError("Invalid data_ column type in ColumnDecimal");
     }

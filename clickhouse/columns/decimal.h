@@ -41,6 +41,7 @@ private:
     ///  - ColumnInt32
     ///  - ColumnInt64
     ///  - ColumnInt128
+    ///  - ColumnInt256
     ColumnRef data_;
 
     explicit ColumnDecimal(TypeRef type, ColumnRef data);

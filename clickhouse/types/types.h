@@ -59,6 +59,7 @@ public:
         Decimal32,
         Decimal64,
         Decimal128,
+        Decimal256,
         LowCardinality,
         DateTime64,
         Date32,
