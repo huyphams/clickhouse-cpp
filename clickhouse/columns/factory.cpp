@@ -232,8 +232,13 @@ static ColumnRef CreateColumnFromAst(const TypeAst& ast, CreateColumnByTypeSetti
                         return std::make_shared<LowCardinalitySerializationAdaptor<ColumnString>>();
                     case Type::FixedString:
                         return std::make_shared<LowCardinalitySerializationAdaptor<ColumnFixedString>>(GetASTChildElement(nested, 0).value);
-                    case Type::Nullable:
+                    case Type::Nullable: {
+                        const auto nullable_nested = GetASTChildElement(nested, 0);
+                        if (nullable_nested.code == Type::String) {
+                            return std::make_shared<LowCardinalitySerializationAdaptor<ColumnNullableT<ColumnString>>>();
+                        }
                         throw UnimplementedError("LowCardinality(" + nested.name + ") is not supported with LowCardinalityAsWrappedColumn on");
+                    }
                     default:
                         throw UnimplementedError("LowCardinality(" + nested.name + ") is not supported");
                 }
