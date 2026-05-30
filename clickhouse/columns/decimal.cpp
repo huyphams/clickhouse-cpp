@@ -106,8 +106,10 @@ ColumnDecimal::ColumnDecimal(size_t precision, size_t scale)
         data_ = std::make_shared<ColumnInt32>();
     } else if (precision <= 18) {
         data_ = std::make_shared<ColumnInt64>();
-    } else {
+    } else if (precision <= 38) {
         data_ = std::make_shared<ColumnInt128>();
+    } else {
+        data_ = std::make_shared<ColumnInt256>();
     }
     data_type_code_ = data_->Type()->GetCode();
 }
@@ -127,9 +129,25 @@ void ColumnDecimal::Append(const Int128& value) {
         case Type::Int64:
             static_cast<ColumnInt64*>(data_.get())->Append(static_cast<int64_t>(value));
             break;
-        default:
+        case Type::Int128:
             static_cast<ColumnInt128*>(data_.get())->Append(static_cast<Int128>(value));
             break;
+        case Type::Int256: {
+            Int256 int256_value;
+            std::memset(int256_value.bytes, 0, sizeof(int256_value.bytes));
+
+            if (value < 0) {
+                std::memset(int256_value.bytes, 0xFF, sizeof(int256_value.bytes));
+            }
+
+            const unsigned char* value_bytes = reinterpret_cast<const unsigned char*>(&value);
+            std::memcpy(int256_value.bytes, value_bytes, sizeof(Int128));
+
+            static_cast<ColumnInt256*>(data_.get())->Append(int256_value);
+            break;
+        }
+        default:
+            throw ValidationError("Invalid data_ column type in ColumnDecimal");
     }
 }
 
@@ -192,6 +210,12 @@ Int128 ColumnDecimal::At(size_t i) const {
             return static_cast<Int128>(static_cast<const ColumnInt64*>(data_.get())->At(i));
         case Type::Int128:
             return static_cast<const ColumnInt128*>(data_.get())->At(i);
+        case Type::Int256: {
+            const Int256& value = static_cast<const ColumnInt256*>(data_.get())->At(i);
+            Int128 result;
+            std::memcpy(&result, value.bytes, sizeof(Int128));
+            return result;
+        }
         default:
             throw ValidationError("Invalid data_ column type in ColumnDecimal");
     }

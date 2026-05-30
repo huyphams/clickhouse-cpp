@@ -15,6 +15,14 @@ using Int128 = absl::int128;
 using UInt128 = absl::uint128;
 using Int64 = int64_t;
 
+struct UInt256 {
+    unsigned char bytes[32];  // 256 bits = 32 bytes
+};
+
+struct Int256 {
+    unsigned char bytes[32];  // 256 bits = 32 bytes
+};
+
 using TypeRef = std::shared_ptr<class Type>;
 
 class Type {
@@ -45,10 +53,13 @@ public:
         IPv6,
         Int128,
         UInt128,
+        Int256,
+        UInt256,
         Decimal,
         Decimal32,
         Decimal64,
         Decimal128,
+        Decimal256,
         LowCardinality,
         DateTime64,
         Date32,
@@ -408,6 +419,16 @@ inline TypeRef Type::CreateSimple<float>() {
 template <>
 inline TypeRef Type::CreateSimple<double>() {
     return TypeRef(new Type(Float64));
+}
+
+template <>
+inline TypeRef Type::CreateSimple<Int256>() {
+    return TypeRef(new Type(Int256));
+}
+
+template <>
+inline TypeRef Type::CreateSimple<UInt256>() {
+    return TypeRef(new Type(UInt256));
 }
 
 }  // namespace clickhouse

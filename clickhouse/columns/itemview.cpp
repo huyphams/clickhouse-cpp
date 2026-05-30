@@ -91,9 +91,14 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::Decimal128:
             return AssertSize({16});
 
+        case Type::Code::Int256:
+        case Type::Code::UInt256:
+        case Type::Code::Decimal256:
+            return AssertSize({32});
+
         case Type::Code::Decimal:
-            // Could be either Decimal32, Decimal64 or Decimal128
-            return AssertSize({4, 8, 16});
+            // Could be either Decimal32, Decimal64, Decimal128 or Decimal256
+            return AssertSize({4, 8, 16, 32});
 
         default:
             throw UnimplementedError("Unknown type code:" + std::to_string(static_cast<int>(type)));

@@ -41,6 +41,7 @@ private:
     ///  - ColumnInt32
     ///  - ColumnInt64
     ///  - ColumnInt128
+    ///  - ColumnInt256
     ColumnRef data_;
     Type::Code data_type_code_;
 

@@ -61,6 +61,8 @@ static ColumnRef CreateTerminalColumn(const TypeAst& ast) {
         return std::make_shared<ColumnUInt32>();
     case Type::UInt64:
         return std::make_shared<ColumnUInt64>();
+    case Type::UInt256:
+        return std::make_shared<ColumnUInt256>();
 
     case Type::Int8:
         return std::make_shared<ColumnInt8>();
@@ -74,6 +76,8 @@ static ColumnRef CreateTerminalColumn(const TypeAst& ast) {
         return std::make_shared<ColumnInt128>();
     case Type::UInt128:
         return std::make_shared<ColumnUInt128>();
+    case Type::Int256:
+        return std::make_shared<ColumnInt256>();
 
     case Type::Float32:
         return std::make_shared<ColumnFloat32>();
@@ -88,6 +92,8 @@ static ColumnRef CreateTerminalColumn(const TypeAst& ast) {
         return std::make_shared<ColumnDecimal>(18, GetASTChildElement(ast, 0).value);
     case Type::Decimal128:
         return std::make_shared<ColumnDecimal>(38, GetASTChildElement(ast, 0).value);
+    case Type::Decimal256:
+        return std::make_shared<ColumnDecimal>(76, GetASTChildElement(ast, 0).value);
 
     case Type::String:
         return std::make_shared<ColumnString>();
@@ -226,8 +232,13 @@ static ColumnRef CreateColumnFromAst(const TypeAst& ast, CreateColumnByTypeSetti
                         return std::make_shared<LowCardinalitySerializationAdaptor<ColumnString>>();
                     case Type::FixedString:
                         return std::make_shared<LowCardinalitySerializationAdaptor<ColumnFixedString>>(GetASTChildElement(nested, 0).value);
-                    case Type::Nullable:
+                    case Type::Nullable: {
+                        const auto nullable_nested = GetASTChildElement(nested, 0);
+                        if (nullable_nested.code == Type::String) {
+                            return std::make_shared<LowCardinalitySerializationAdaptor<ColumnNullableT<ColumnString>>>();
+                        }
                         throw UnimplementedError("LowCardinality(" + nested.name + ") is not supported with LowCardinalityAsWrappedColumn on");
+                    }
                     default:
                         throw UnimplementedError("LowCardinality(" + nested.name + ") is not supported");
                 }

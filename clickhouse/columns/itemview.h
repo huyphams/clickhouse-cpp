@@ -30,7 +30,9 @@ private:
             return std::string_view{t};
         } else if constexpr (std::is_fundamental_v<T>
                           || std::is_same_v<Int128, std::decay_t<T>>
-                          || std::is_same_v<UInt128, std::decay_t<T>>) {
+                          || std::is_same_v<UInt128, std::decay_t<T>>
+                          || std::is_same_v<Int256, std::decay_t<T>>
+                          || std::is_same_v<UInt256, std::decay_t<T>>) {
             return std::string_view{reinterpret_cast<const char*>(&t), sizeof(T)};
         } else {
             static_assert(!std::is_same_v<T, T>, "Unknown type, which can't be stored in ItemView");
@@ -69,7 +71,9 @@ public:
             return data;
         } else if constexpr (std::is_fundamental_v<ValueType>
                           || std::is_same_v<Int128, ValueType>
-                          || std::is_same_v<UInt128, ValueType>) {
+                          || std::is_same_v<UInt128, ValueType>
+                          || std::is_same_v<Int256, ValueType>
+                          || std::is_same_v<UInt256, ValueType>) {
             if (sizeof(ValueType) == data.size()) {
                 return *reinterpret_cast<const T*>(data.data());
             } else {
