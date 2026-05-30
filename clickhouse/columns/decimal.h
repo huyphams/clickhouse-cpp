@@ -43,6 +43,7 @@ private:
     ///  - ColumnInt128
     ///  - ColumnInt256
     ColumnRef data_;
+    Type::Code data_type_code_;
 
     explicit ColumnDecimal(TypeRef type, ColumnRef data);
 };

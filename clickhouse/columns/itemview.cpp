@@ -44,6 +44,7 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::Int8:
         case Type::Code::UInt8:
         case Type::Code::Enum8:
+        case Type::Code::Bool:
             return AssertSize({1});
 
         case Type::Code::Int16:
@@ -59,6 +60,7 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::Date32:
         case Type::Code::IPv4:
         case Type::Code::Decimal32:
+        case Type::Code::Time:
             return AssertSize({4});
 
         case Type::Code::Int64:
@@ -66,10 +68,12 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
         case Type::Code::Float64:
         case Type::Code::DateTime64:
         case Type::Code::Decimal64:
+        case Type::Code::Time64:
             return AssertSize({8});
 
         case Type::Code::String:
         case Type::Code::FixedString:
+        case Type::Code::JSON:
             // value can be of any size
             return;
 
@@ -82,18 +86,19 @@ void ItemView::ValidateData(Type::Code type, DataType data) {
 
         case Type::Code::IPv6:
         case Type::Code::UUID:
-        case Type::Code::Int128:
         case Type::Code::UInt128:
+        case Type::Code::Int128:
         case Type::Code::Decimal128:
             return AssertSize({16});
 
         case Type::Code::Int256:
         case Type::Code::UInt256:
+        case Type::Code::Decimal256:
             return AssertSize({32});
 
         case Type::Code::Decimal:
-            // Could be either Decimal32, Decimal64 or Decimal128
-            return AssertSize({4, 8, 16});
+            // Could be either Decimal32, Decimal64, Decimal128 or Decimal256
+            return AssertSize({4, 8, 16, 32});
 
         default:
             throw UnimplementedError("Unknown type code:" + std::to_string(static_cast<int>(type)));

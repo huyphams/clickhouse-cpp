@@ -111,36 +111,43 @@ ColumnDecimal::ColumnDecimal(size_t precision, size_t scale)
     } else {
         data_ = std::make_shared<ColumnInt256>();
     }
+    data_type_code_ = data_->Type()->GetCode();
 }
 
 ColumnDecimal::ColumnDecimal(TypeRef type, ColumnRef data)
     : Column(type),
-      data_(data)
+      data_(data),
+      data_type_code_(data_->Type()->GetCode())
 {
 }
 
 void ColumnDecimal::Append(const Int128& value) {
-    if (data_->Type()->GetCode() == Type::Int32) {
-        data_->As<ColumnInt32>()->Append(static_cast<ColumnInt32::DataType>(value));
-    } else if (data_->Type()->GetCode() == Type::Int64) {
-        data_->As<ColumnInt64>()->Append(static_cast<ColumnInt64::DataType>(value));
-    } else if (data_->Type()->GetCode() == Type::Int128) {
-        data_->As<ColumnInt128>()->Append(static_cast<ColumnInt128::DataType>(value));
-    } else {
-        // For Int256, we need to convert Int128 to Int256
-        Int256 int256_value;
-        std::memset(int256_value.bytes, 0, sizeof(int256_value.bytes));
-        
-        // Handle negative values by sign-extending
-        if (value < 0) {
-            std::memset(int256_value.bytes, 0xFF, sizeof(int256_value.bytes));
+    switch (data_type_code_) {
+        case Type::Int32:
+            static_cast<ColumnInt32*>(data_.get())->Append(static_cast<int32_t>(value));
+            break;
+        case Type::Int64:
+            static_cast<ColumnInt64*>(data_.get())->Append(static_cast<int64_t>(value));
+            break;
+        case Type::Int128:
+            static_cast<ColumnInt128*>(data_.get())->Append(static_cast<Int128>(value));
+            break;
+        case Type::Int256: {
+            Int256 int256_value;
+            std::memset(int256_value.bytes, 0, sizeof(int256_value.bytes));
+
+            if (value < 0) {
+                std::memset(int256_value.bytes, 0xFF, sizeof(int256_value.bytes));
+            }
+
+            const unsigned char* value_bytes = reinterpret_cast<const unsigned char*>(&value);
+            std::memcpy(int256_value.bytes, value_bytes, sizeof(Int128));
+
+            static_cast<ColumnInt256*>(data_.get())->Append(int256_value);
+            break;
         }
-        
-        // Copy the Int128 value to the lower 16 bytes of Int256
-        const unsigned char* value_bytes = reinterpret_cast<const unsigned char*>(&value);
-        std::memcpy(int256_value.bytes, value_bytes, sizeof(Int128));
-        
-        data_->As<ColumnInt256>()->Append(int256_value);
+        default:
+            throw ValidationError("Invalid data_ column type in ColumnDecimal");
     }
 }
 
@@ -196,16 +203,15 @@ void ColumnDecimal::Append(const std::string& value) {
 }
 
 Int128 ColumnDecimal::At(size_t i) const {
-    switch (data_->Type()->GetCode()) {
+    switch (data_type_code_) {
         case Type::Int32:
-            return static_cast<Int128>(data_->As<ColumnInt32>()->At(i));
+            return static_cast<Int128>(static_cast<const ColumnInt32*>(data_.get())->At(i));
         case Type::Int64:
-            return static_cast<Int128>(data_->As<ColumnInt64>()->At(i));
+            return static_cast<Int128>(static_cast<const ColumnInt64*>(data_.get())->At(i));
         case Type::Int128:
-            return data_->As<ColumnInt128>()->At(i);
+            return static_cast<const ColumnInt128*>(data_.get())->At(i);
         case Type::Int256: {
-            // Convert Int256 to Int128 (may lose precision)
-            const Int256& value = data_->As<ColumnInt256>()->At(i);
+            const Int256& value = static_cast<const ColumnInt256*>(data_.get())->At(i);
             Int128 result;
             std::memcpy(&result, value.bytes, sizeof(Int128));
             return result;

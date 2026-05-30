@@ -24,7 +24,6 @@ const char* Type::TypeName(Type::Code code) {
         case Type::Code::UInt16:         return "UInt16";
         case Type::Code::UInt32:         return "UInt32";
         case Type::Code::UInt64:         return "UInt64";
-        case Type::Code::UInt128:        return "UInt128";
         case Type::Code::Float32:        return "Float32";
         case Type::Code::Float64:        return "Float64";
         case Type::Code::String:         return "String";
@@ -40,6 +39,7 @@ const char* Type::TypeName(Type::Code code) {
         case Type::Code::IPv4:           return "IPv4";
         case Type::Code::IPv6:           return "IPv6";
         case Type::Code::Int128:         return "Int128";
+        case Type::Code::UInt128:        return "UInt128";
         case Type::Code::Int256:         return "Int256";
         case Type::Code::UInt256:        return "UInt256";
         case Type::Code::Decimal:        return "Decimal";
@@ -55,6 +55,10 @@ const char* Type::TypeName(Type::Code code) {
         case Type::Code::Ring:           return "Ring";
         case Type::Code::Polygon:        return "Polygon";
         case Type::Code::MultiPolygon:   return "MultiPolygon";
+        case Type::Code::Time:           return "Time";
+        case Type::Code::Time64:         return "Time64";
+        case Type::Code::JSON:           return "JSON";
+        case Type::Code::Bool:           return "Bool";
     }
 
     return "Unknown type";
@@ -83,11 +87,16 @@ std::string Type::GetName() const {
         case IPv6:
         case Date:
         case Date32:
+        case Time:
         case Point:
         case Ring:
         case Polygon:
         case MultiPolygon:
+        case JSON:
+        case Bool:
             return TypeName(code_);
+        case Time64:
+            return As<Time64Type>()->GetName();
         case FixedString:
             return As<FixedStringType>()->GetName();
         case DateTime:
@@ -141,6 +150,7 @@ uint64_t Type::GetTypeUniqueId() const {
         case Float32:
         case Float64:
         case String:
+        case JSON:
         case IPv4:
         case IPv6:
         case Date:
@@ -149,10 +159,13 @@ uint64_t Type::GetTypeUniqueId() const {
         case Ring:
         case Polygon:
         case MultiPolygon:
+        case Bool:
             // For simple types, unique ID is the same as Type::Code
             return code_;
 
         case FixedString:
+        case Time:
+        case Time64:
         case DateTime:
         case DateTime64:
         case Array:
@@ -197,6 +210,14 @@ TypeRef Type::CreateDate32() {
     return TypeRef(new Type(Type::Date32));
 }
 
+TypeRef Type::CreateTime() {
+    return TypeRef(new Type(Type::Time));
+}
+
+TypeRef Type::CreateTime64(size_t precision) {
+    return TypeRef(new Time64Type(precision));
+}
+
 TypeRef Type::CreateDateTime(std::string timezone) {
     return TypeRef(new DateTimeType(std::move(timezone)));
 }
@@ -233,8 +254,9 @@ TypeRef Type::CreateString(size_t n) {
     return TypeRef(new FixedStringType(n));
 }
 
-TypeRef Type::CreateTuple(const std::vector<TypeRef>& item_types) {
-    return TypeRef(new TupleType(item_types));
+TypeRef Type::CreateTuple(const std::vector<TypeRef>& item_types,
+                          std::vector<std::string> item_names) {
+    return TypeRef(new TupleType(item_types, std::move(item_names)));
 }
 
 TypeRef Type::CreateEnum8(const std::vector<EnumItem>& enum_items) {
@@ -271,6 +293,10 @@ TypeRef Type::CreatePolygon() {
 
 TypeRef Type::CreateMultiPolygon() {
     return TypeRef(new Type(Type::MultiPolygon));
+}
+
+TypeRef Type::CreateJSON() {
+    return TypeRef(new Type(Type::JSON));
 }
 
 /// class ArrayType
@@ -377,6 +403,18 @@ const std::string & TypeWithTimeZoneMixin::Timezone() const {
 }
 }
 
+/// class Time64
+Time64Type::Time64Type(size_t precision)
+    : Type(Time64), precision_{precision} {
+    if (precision_ > 9) {
+        throw ValidationError("Time64 precision is > 9");
+    }
+}
+
+std::string Time64Type::GetName() const {
+    return "Time64(" + std::to_string(precision_) + ")";
+}
+
 /// class DateTimeType
 DateTimeType::DateTimeType(std::string timezone)
     : Type(DateTime), details::TypeWithTimeZoneMixin(std::move(timezone)) {
@@ -426,9 +464,17 @@ FixedStringType::FixedStringType(size_t n) : Type(FixedString), size_(n) {
 NullableType::NullableType(TypeRef nested_type) : Type(Nullable), nested_type_(nested_type) {
 }
 
-/// class TupleType
-
-TupleType::TupleType(const std::vector<TypeRef>& item_types) : Type(Tuple), item_types_(item_types) {
+TupleType::TupleType(const std::vector<TypeRef>& item_types,
+                     std::vector<std::string> item_names)
+    : Type(Tuple), item_types_(item_types), item_names_(std::move(item_names)) {
+    if (!item_names_.empty() && item_names_.size() != item_types_.size()) {
+        throw ValidationError("Tuple field names count doesn't match tuple element count");
+    }
+    for (const auto& item_name : item_names_) {
+        if (item_name.empty()) {
+            throw ValidationError("Tuple field names can't be empty");
+        }
+    }
 }
 
 /// class LowCardinalityType
@@ -440,13 +486,22 @@ LowCardinalityType::~LowCardinalityType() {
 
 std::string TupleType::GetName() const {
     std::string result("Tuple(");
+    bool has_complete_names = !item_names_.empty();
 
     if (!item_types_.empty()) {
-        result += item_types_[0]->GetName();
+        if (has_complete_names) {
+            result += item_names_[0] + " " + item_types_[0]->GetName();
+        } else {
+            result += item_types_[0]->GetName();
+        }
     }
 
     for (size_t i = 1; i < item_types_.size(); ++i) {
-        result += ", " + item_types_[i]->GetName();
+        if (has_complete_names) {
+            result += ", " + item_names_[i] + " " + item_types_[i]->GetName();
+        } else {
+            result += ", " + item_types_[i]->GetName();
+        }
     }
 
     result += ")";
