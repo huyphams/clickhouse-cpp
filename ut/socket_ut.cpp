@@ -1,8 +1,11 @@
 #include "tcp_server.h"
 
 #include <clickhouse/base/socket.h>
+#include <clickhouse/base/wire_format.h>
+#include <clickhouse/exceptions.h>
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <iostream>
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +16,7 @@
 #   include <ws2tcpip.h>
 #else
 #   include <netdb.h>
+#   include <unistd.h>
 #endif
 
 using namespace clickhouse;
@@ -129,3 +133,76 @@ TEST(Socketcase, connecttimeout) {
 //    auto input = socket.makeInputStream();
 //    input->Read(buffer, sizeof(buffer));
 //}
+
+namespace {
+
+// RAII wrapper for the socket
+class ScopedSocket {
+public:
+    explicit ScopedSocket(SOCKET socket) : handle(socket) {}
+
+    ~ScopedSocket() {
+        if (handle != static_cast<SOCKET>(-1)) {
+#if defined(_win_)
+            ::closesocket(handle);
+#else
+            ::close(handle);
+#endif
+        }
+    }
+
+    ScopedSocket(const ScopedSocket&) = delete;
+    ScopedSocket& operator=(const ScopedSocket&) = delete;
+
+    const SOCKET handle;
+};
+
+} // namespace
+
+TEST(Socketcase, ReadEofThrowsProtocolError) {
+    const ScopedSocket listener(::socket(AF_INET, SOCK_STREAM, 0));
+    ASSERT_NE(static_cast<SOCKET>(-1), listener.handle);
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    ASSERT_EQ(0, ::bind(listener.handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)));
+    ASSERT_EQ(0, ::listen(listener.handle, 1));
+
+    socklen_t address_size = sizeof(address);
+    ASSERT_EQ(0, ::getsockname(listener.handle, reinterpret_cast<sockaddr*>(&address), &address_size));
+
+    const NetworkAddress client_address("127.0.0.1", std::to_string(ntohs(address.sin_port)));
+    const auto timeout = std::chrono::seconds(5);
+    Socket client(client_address, SocketTimeoutParams{timeout, timeout, timeout});
+
+    // The listener's backlog lets connect complete before accept, without a thread.
+    const ScopedSocket peer(::accept(listener.handle, nullptr, nullptr));
+    ASSERT_NE(static_cast<SOCKET>(-1), peer.handle);
+
+    const std::string payload = "hello";
+    SocketOutput output(peer.handle);
+    WireFormat::WriteBytes(output, payload.data(), payload.size());
+
+    auto input = client.makeInputStream();
+    char buf[16];
+    ASSERT_TRUE(WireFormat::ReadBytes(*input, buf, payload.size()));
+    ASSERT_EQ(payload, std::string(buf, payload.size()));
+
+    // All data has been read; after FIN, the client's next nonempty recv returns 0 (EOF).
+#if defined(_win_)
+    ASSERT_EQ(0, ::shutdown(peer.handle, SD_SEND));
+#else
+    ASSERT_EQ(0, ::shutdown(peer.handle, SHUT_WR));
+#endif
+
+    // Seed an unrelated error; EOF must still be reported as ProtocolError.
+#if defined(_win_)
+    ::WSASetLastError(WSAECONNRESET);
+#else
+    errno = EIO;
+#endif
+
+    EXPECT_THROW(input->Read(buf, sizeof(buf)), ProtocolError);
+}
