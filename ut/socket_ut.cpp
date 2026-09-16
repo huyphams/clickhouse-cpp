@@ -1,8 +1,11 @@
 #include "tcp_server.h"
 
 #include <clickhouse/base/socket.h>
+#include <clickhouse/base/wire_format.h>
+#include <clickhouse/exceptions.h>
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <iostream>
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +16,7 @@
 #   include <ws2tcpip.h>
 #else
 #   include <netdb.h>
+#   include <unistd.h>
 #endif
 
 using namespace clickhouse;
@@ -130,48 +134,75 @@ TEST(Socketcase, connecttimeout) {
 //    input->Read(buffer, sizeof(buffer));
 //}
 
-#if !defined(_win_)
-#   include <cerrno>
-#   include <sys/socket.h>
-#   include <unistd.h>
+namespace {
 
-// Regression test for issue #487.
-//
-// On a clean peer close, `recv()` returns 0, which is EOF, not a syscall
-// error. POSIX does NOT require `errno` to be set when `recv()` returns 0,
-// so reading `errno` at that point would yield a stale value from a previous
-// syscall. The proper representation is a protocol-level / truncated-data
-// failure, not a `std::system_error`: the underlying `recv()` succeeded;
-// the decoder expected more protocol bytes and the connection ended instead.
-//
-// The fix throws `clickhouse::ProtocolError` on `recv() == 0`. The other
-// `recv() < 0` path still uses `std::system_error` because that is an
-// actual syscall failure. This test drives a clean close via `socketpair(2)`
-// and asserts the resulting exception is exactly `ProtocolError` with a
-// message indicating a peer-closed connection.
-TEST(Socketcase, recvReturnsZeroReportsProtocolErrorNotStaleErrno) {
-    int sv[2];
-    ASSERT_EQ(0, ::socketpair(AF_UNIX, SOCK_STREAM, 0, sv));
+// RAII wrapper for the socket
+class ScopedSocket {
+public:
+    explicit ScopedSocket(SOCKET socket) : handle(socket) {}
 
-    SocketInput input(sv[0]);
-    // Close the peer side: the next `recv()` on sv[0] returns 0 (EOF).
-    ::close(sv[1]);
-
-    char buf[16];
-    try {
-        input.Read(buf, sizeof(buf));
-        ::close(sv[0]);
-        FAIL() << "expected ProtocolError on clean peer close";
-    } catch (const ProtocolError& e) {
-        ::close(sv[0]);
-        const std::string what = e.what();
-        EXPECT_NE(what.find("closed"), std::string::npos)
-            << "expected message to mention 'closed', got: " << what;
-    } catch (const std::system_error& e) {
-        ::close(sv[0]);
-        FAIL() << "recv()==0 must be reported as ProtocolError, not "
-                  "std::system_error (got errno-style code "
-               << e.code().value() << "); stale errno regression";
+    ~ScopedSocket() {
+        if (handle != static_cast<SOCKET>(-1)) {
+#if defined(_win_)
+            ::closesocket(handle);
+#else
+            ::close(handle);
+#endif
+        }
     }
+
+    ScopedSocket(const ScopedSocket&) = delete;
+    ScopedSocket& operator=(const ScopedSocket&) = delete;
+
+    const SOCKET handle;
+};
+
+} // namespace
+
+TEST(Socketcase, ReadEofThrowsProtocolError) {
+    const ScopedSocket listener(::socket(AF_INET, SOCK_STREAM, 0));
+    ASSERT_NE(static_cast<SOCKET>(-1), listener.handle);
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    ASSERT_EQ(0, ::bind(listener.handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)));
+    ASSERT_EQ(0, ::listen(listener.handle, 1));
+
+    socklen_t address_size = sizeof(address);
+    ASSERT_EQ(0, ::getsockname(listener.handle, reinterpret_cast<sockaddr*>(&address), &address_size));
+
+    const NetworkAddress client_address("127.0.0.1", std::to_string(ntohs(address.sin_port)));
+    const auto timeout = std::chrono::seconds(5);
+    Socket client(client_address, SocketTimeoutParams{timeout, timeout, timeout});
+
+    // The listener's backlog lets connect complete before accept, without a thread.
+    const ScopedSocket peer(::accept(listener.handle, nullptr, nullptr));
+    ASSERT_NE(static_cast<SOCKET>(-1), peer.handle);
+
+    const std::string payload = "hello";
+    SocketOutput output(peer.handle);
+    WireFormat::WriteBytes(output, payload.data(), payload.size());
+
+    auto input = client.makeInputStream();
+    char buf[16];
+    ASSERT_TRUE(WireFormat::ReadBytes(*input, buf, payload.size()));
+    ASSERT_EQ(payload, std::string(buf, payload.size()));
+
+    // All data has been read; after FIN, the client's next nonempty recv returns 0 (EOF).
+#if defined(_win_)
+    ASSERT_EQ(0, ::shutdown(peer.handle, SD_SEND));
+#else
+    ASSERT_EQ(0, ::shutdown(peer.handle, SHUT_WR));
+#endif
+
+    // Seed an unrelated error; EOF must still be reported as ProtocolError.
+#if defined(_win_)
+    ::WSASetLastError(WSAECONNRESET);
+#else
+    errno = EIO;
+#endif
+
+    EXPECT_THROW(input->Read(buf, sizeof(buf)), ProtocolError);
 }
-#endif  // !defined(_win_)

@@ -430,22 +430,24 @@ SocketInput::SocketInput(SOCKET s)
 SocketInput::~SocketInput() = default;
 
 size_t SocketInput::DoRead(void* buf, size_t len) {
-    const ssize_t ret = ::recv(s_, (char*)buf, (int)len, 0);
 
-    if (ret > 0) {
-        return (size_t)ret;
+    ssize_t ret = 0;
+    do {
+        ret = ::recv(s_, (char*)buf, (int)len, 0);
+    } while (ret < 0 && errno == EINTR);
+
+    if (ret < 0) {
+        throw std::system_error(getSocketErrorCode(), getErrorCategory(), "can't receive string data");
     }
 
-    if (ret == 0) {
-        // Clean peer close (EOF) before the requested number of bytes
-        // arrived: the underlying `recv()` succeeded, so this is not a
-        // syscall error. The decoder expected more protocol data and the
-        // connection ended instead, so surface this as a truncated-data
-        // / protocol decoding failure rather than a system_error.
+    if (ret == 0 && len != 0) {
+        // Server closed connection, the protocol-aware consumers must not read past EOF
+        // If that happens, this is probably an error either in the client or the server closed
+        // the connection prematurely.
         throw ProtocolError("connection closed by peer while reading");
     }
 
-    throw std::system_error(getSocketErrorCode(), getErrorCategory(), "can't receive string data");
+    return (size_t)ret;
 }
 
 bool SocketInput::Skip(size_t /*bytes*/) {
