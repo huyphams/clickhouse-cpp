@@ -8,6 +8,7 @@
 
 #include "readonly_client_test.h"
 #include "connection_failed_client_test.h"
+#include "test_socket_factory_adapters.h"
 #include "ut/utils_comparison.h"
 #include "utils.h"
 #include "ut/roundtrip_column.h"
@@ -37,6 +38,16 @@ ClientBoolValue MakeClientBoolValue(bool value) {
     return static_cast<uint8_t>(value);
 #else
     return value;
+#endif
+}
+
+// Client::GetCurrentEndpoint() returns either Endpoint or std::optional<Endpoint>
+// depending on CH_NON_OPTIONAL_CURRENT_ENDPOINT; normalize to Endpoint for tests.
+Endpoint CurrentEndpoint(const Client & client) {
+#if CH_NON_OPTIONAL_CURRENT_ENDPOINT
+    return client.GetCurrentEndpoint();
+#else
+    return client.GetCurrentEndpoint().value();
 #endif
 }
 
@@ -1783,7 +1794,7 @@ TEST_P(ConnectionSuccessTestCase, SuccessConnectionEstablished) {
 
     try {
         client = std::make_unique<Client>(client_options);
-        auto endpoint = client->GetCurrentEndpoint().value();
+        auto endpoint = CurrentEndpoint(*client);
         ASSERT_EQ("localhost", endpoint.host);
         ASSERT_EQ(9000u, endpoint.port);
         SUCCEED();
@@ -1849,31 +1860,44 @@ INSTANTIATE_TEST_SUITE_P(MultipleEndpointsFailed, ConnectionFailedClientTest,
 
 class ResetConnectionTestCase : public testing::TestWithParam<ClientOptions> {};
 
-TEST_P(ResetConnectionTestCase, ResetConnectionEndpointTest) {
-    const auto & client_options = GetParam();
-    std::unique_ptr<Client> client;
+TEST(ResetConnectionEndpointTest, ReconnectsCurrentBeforeFailover) {
+    const Endpoint primary{"primary", 9000};
+    const Endpoint secondary{"secondary", 9000};
+    const Endpoint actual_endpoint{LocalHostEndpoint.host, LocalHostEndpoint.port};
 
-    try {
-        client = std::make_unique<Client>(client_options);
-        auto endpoint = client->GetCurrentEndpoint().value();
-        ASSERT_EQ("localhost", endpoint.host);
-        ASSERT_EQ(9000u, endpoint.port);
+    ClientOptions options(LocalHostEndpoint);
+    options.SetHost("");
+    options.SetEndpoints({primary, secondary});
 
-        client->ResetConnectionEndpoint();
-        endpoint = client->GetCurrentEndpoint().value();
-        ASSERT_EQ("127.0.0.1", endpoint.host);
-        ASSERT_EQ(9000u, endpoint.port);
+    // Redirect both logical endpoints to the same reachable test server.
+    auto base_socket_factory = std::make_unique<NonSecureSocketFactory>();
+    auto socket_factory = std::make_unique<FailOnceSocketFactoryAdapter>(*base_socket_factory, actual_endpoint);
+    auto * const adapter = socket_factory.get();
 
-        client->ResetConnectionEndpoint();
+    // The initial connection selects the first endpoint.
+    Client client(options, std::move(socket_factory));
+    ASSERT_EQ(primary, CurrentEndpoint(client));
 
-        endpoint = client->GetCurrentEndpoint().value();
-        ASSERT_EQ("localhost", endpoint.host);
-        ASSERT_EQ(9000u, endpoint.port);
+    // A healthy current endpoint is retried without advancing.
+    adapter->SetFailEndpoint(std::nullopt);
+    adapter->ClearConnectRequests();
+    client.ResetConnectionEndpoint();
+    EXPECT_EQ(primary, CurrentEndpoint(client));
+    EXPECT_EQ(std::vector<Endpoint>{primary}, adapter->ConnectRequests());
 
-        SUCCEED();
-    } catch (const std::exception & e) {
-        FAIL() << "Got an unexpected exception : " << e.what();
-    }
+    // Failure of the current endpoint advances to the next endpoint.
+    adapter->SetFailEndpoint(primary);
+    adapter->ClearConnectRequests();
+    client.ResetConnectionEndpoint();
+    EXPECT_EQ(secondary, CurrentEndpoint(client));
+    EXPECT_EQ((std::vector<Endpoint>{primary, secondary}), adapter->ConnectRequests());
+
+    // Failure of the last endpoint wraps around to the first endpoint.
+    adapter->SetFailEndpoint(secondary);
+    adapter->ClearConnectRequests();
+    client.ResetConnectionEndpoint();
+    EXPECT_EQ(primary, CurrentEndpoint(client));
+    EXPECT_EQ((std::vector<Endpoint>{secondary, primary}), adapter->ConnectRequests());
 }
 
 TEST_P(ResetConnectionTestCase, ResetConnectionTest) {
@@ -1882,12 +1906,12 @@ TEST_P(ResetConnectionTestCase, ResetConnectionTest) {
 
     try {
         client = std::make_unique<Client>(client_options);
-        auto endpoint = client->GetCurrentEndpoint().value();
+        auto endpoint = CurrentEndpoint(*client);
         ASSERT_EQ("localhost", endpoint.host);
         ASSERT_EQ(9000u, endpoint.port);
 
         client->ResetConnection();
-        endpoint = client->GetCurrentEndpoint().value();
+        endpoint = CurrentEndpoint(*client);
         ASSERT_EQ("localhost", endpoint.host);
         ASSERT_EQ(9000u, endpoint.port);
 

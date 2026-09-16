@@ -9,6 +9,7 @@
 #include "columns/factory.h"
 
 #include <cassert>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <system_error>
@@ -157,7 +158,6 @@ struct ProfileEvents {
 struct EndOfStream {
 };
 using DecodedPacket = std::variant<
-    std::monostate,
     Block,
     ServerException,
     Profile,
@@ -177,15 +177,6 @@ std::unique_ptr<SocketFactory> GetSocketFactory(const ClientOptions& opts) {
     else
 #endif
         return std::make_unique<NonSecureSocketFactory>();
-}
-
-std::unique_ptr<EndpointsIteratorBase> GetEndpointsIterator(const ClientOptions& opts) {
-    if (opts.endpoints.empty())
-    {
-        throw ValidationError("The list of endpoints is empty");
-    }
-
-    return std::make_unique<RoundRobinEndpointsIterator>(opts.endpoints);
 }
 
 } // anonymous namespace
@@ -256,7 +247,17 @@ private:
     bool ReceiveData(Block & block);
 
     /// Reads exception packet form input stream.
-    bool ReceiveException(bool rethrow = false, ServerError * error = nullptr);
+    bool ReceiveException(ServerError & error);
+
+    bool ReceiveProfileInfo(Profile & profile);
+
+    bool ReceiveProgress(Progress & progress);
+
+    bool ReceiveLog(Block & block);
+
+    bool ReceiveTableColumns();
+
+    bool ReceiveProfileEvents(Block & block);
 
     void WriteBlock(const Block& block, OutputStream& output);
 
@@ -264,17 +265,10 @@ private:
 
     void InitializeStreams(std::unique_ptr<SocketBase>&& socket);
 
-    inline size_t GetConnectionAttempts() const
-    {
-        return options_.endpoints.size() * options_.send_retries;
-    }
-
 private:
     /// In case of network errors tries to reconnect to server and
     /// call fuc several times.
     void RetryGuard(std::function<void()> func);
-
-    void RetryConnectToTheEndpoint(std::function<void()>& func);
 
 private:
     enum class State : uint8_t {
@@ -317,6 +311,8 @@ private:
     std::unique_ptr<SocketBase> socket_;
     std::unique_ptr<EndpointsIteratorBase> endpoints_iterator;
 
+    // current_endpoint_ points to the last successfully connected endpoint, and always
+    // holds a value. The variable remains wrapped as optional for backwards compatibility.
     std::optional<Endpoint> current_endpoint_;
 
     ServerInfo server_info_;
@@ -342,7 +338,8 @@ Client::Impl::Impl(const ClientOptions& opts,
     : options_(modifyClientOptions(opts))
     , events_(nullptr)
     , socket_factory_(std::move(socket_factory))
-    , endpoints_iterator(GetEndpointsIterator(options_))
+    , endpoints_iterator(std::make_unique<RoundRobinEndpointsIterator>(options_.endpoints))
+    , current_endpoint_(endpoints_iterator->Next())
 {
     CreateConnection();
 
@@ -399,7 +396,9 @@ std::optional<Block> Client::Impl::NextBlock() {
                 return {std::move(block)};
             }
             case VariantIndex<ServerError, decltype(packet)>():
-            case VariantIndex<std::monostate, decltype(packet)>():
+                // Normally `ReceivePacket()` throws on server exceptions, but it can be
+                // suppressed by `ClientOptions::SetRethrowException`. In that case the
+                // error marks the end of the response.
             case VariantIndex<EndOfStream, decltype(packet)>():
                 ResetState();
                 return std::nullopt;
@@ -619,20 +618,23 @@ void Client::Impl::ResetConnection() {
 }
 
 void Client::Impl::ResetConnectionEndpoint() {
-    current_endpoint_.reset();
-    for (size_t i = 0; i < options_.endpoints.size();)
+    std::optional<Endpoint> last_endpoint = current_endpoint_;
+    for (size_t i = 1; ; ++i)
     {
         try
         {
-            current_endpoint_ = endpoints_iterator->Next();
             ResetConnection();
             return;
         } catch (const std::system_error&) {
-            if (++i == options_.endpoints.size())
+            current_endpoint_ = endpoints_iterator->Next();
+            if (i >= options_.endpoints.size())
             {
-                current_endpoint_.reset();
+                current_endpoint_ = last_endpoint;
                 throw;
             }
+        } catch (...) {
+            current_endpoint_ = last_endpoint;
+            throw;
         }
     }
 }
@@ -640,7 +642,7 @@ void Client::Impl::ResetConnectionEndpoint() {
 void Client::Impl::CreateConnection() {
     // make sure to try to connect to each endpoint at least once even if `options_.send_retries` is 0
     const size_t max_attempts = (options_.send_retries ? options_.send_retries : 1);
-    for (size_t i = 0; i < max_attempts;)
+    for (size_t i = 1; ; ++i)
     {
         try
         {
@@ -648,7 +650,7 @@ void Client::Impl::CreateConnection() {
             ResetConnectionEndpoint();
             return;
         } catch (const std::system_error&) {
-            if (++i >= max_attempts)
+            if (i >= max_attempts)
             {
                 throw;
             }
@@ -684,7 +686,7 @@ DecodedPacket Client::Impl::ReceivePacket(uint64_t* server_packet) {
     uint64_t packet_type = 0;
 
     if (!WireFormat::ReadVarint64(*input_, &packet_type)) {
-        return {};
+        throw ProtocolError{"can't read packet type from input stream"};
     }
     if (server_packet) {
         *server_packet = packet_type;
@@ -694,76 +696,37 @@ DecodedPacket Client::Impl::ReceivePacket(uint64_t* server_packet) {
     case ServerCodes::Data: {
         Block ret{};
         if (!ReceiveData(ret)) {
-            throw ProtocolError("can't read data packet from input stream");
+            throw ProtocolError{"can't read data packet from input stream"};
         }
         return ret;
     }
 
     case ServerCodes::Exception: {
         ServerError ret{std::make_shared<Exception>()};
-        if (!ReceiveException(false, &ret)) {
-            throw ProtocolError("can't read exception packet from input stream");
+        if (!ReceiveException(ret)) {
+            throw ProtocolError{"server reported an error, but the exception packet could not be decoded (error details lost)"};
         }
+
+        if (options_.rethrow_exceptions) {
+            throw ret;
+        }
+
         return ret;
     }
 
     case ServerCodes::ProfileInfo: {
         Profile ret{};
-
-        if (!WireFormat::ReadUInt64(*input_, &ret.rows)) {
-            return {};
+        if (!ReceiveProfileInfo(ret)) {
+            throw ProtocolError{"can't read profile info packet from input stream"};
         }
-        if (!WireFormat::ReadUInt64(*input_, &ret.blocks)) {
-            return {};
-        }
-        if (!WireFormat::ReadUInt64(*input_, &ret.bytes)) {
-            return {};
-        }
-        if (!WireFormat::ReadFixed(*input_, &ret.applied_limit)) {
-            return {};
-        }
-        if (!WireFormat::ReadUInt64(*input_, &ret.rows_before_limit)) {
-            return {};
-        }
-        if (!WireFormat::ReadFixed(*input_, &ret.calculated_rows_before_limit)) {
-            return {};
-        }
-
-        if (events_) {
-            events_->OnProfile(ret);
-        }
-
         return ret;
     }
 
     case ServerCodes::Progress: {
         Progress ret{};
-
-        if (!WireFormat::ReadUInt64(*input_, &ret.rows)) {
-            return {};
+        if (!ReceiveProgress(ret)) {
+            throw ProtocolError{"can't read progress packet from input stream"};
         }
-        if (!WireFormat::ReadUInt64(*input_, &ret.bytes)) {
-            return {};
-        }
-        if constexpr(DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS) {
-            if (!WireFormat::ReadUInt64(*input_, &ret.total_rows)) {
-                return {};
-            }
-        }
-        if (server_info_.revision >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
-        {
-            if (!WireFormat::ReadUInt64(*input_, &ret.written_rows)) {
-                return {};
-            }
-            if (!WireFormat::ReadUInt64(*input_, &ret.written_bytes)) {
-                return {};
-            }
-        }
-
-        if (events_) {
-            events_->OnProgress(ret);
-        }
-
         return ret;
     }
 
@@ -783,55 +746,30 @@ DecodedPacket Client::Impl::ReceivePacket(uint64_t* server_packet) {
     }
 
     case ServerCodes::Log: {
-        // log tag
-        if (!WireFormat::SkipString(*input_)) {
-            return {};
-        }
         Log ret;
-
-        // Use uncompressed stream since log blocks usually contain only one row
-        if (!ReadBlock(*input_, &ret.block)) {
-            return {};
-        }
-
-        if (events_) {
-            events_->OnServerLog(ret.block);
+        if (!ReceiveLog(ret.block)) {
+            throw ProtocolError{"can't read log packet from input stream"};
         }
         return ret;
     }
 
     case ServerCodes::TableColumns: {
-        // external table name
-        if (!WireFormat::SkipString(*input_)) {
-            return {};
-        }
-
-        //  columns metadata
-        if (!WireFormat::SkipString(*input_)) {
-            return {};
+        if (!ReceiveTableColumns()) {
+            throw ProtocolError{"can't read table columns packet from input stream"};
         }
         return TableColumns{};
     }
 
     case ServerCodes::ProfileEvents: {
-        if (!WireFormat::SkipString(*input_)) {
-            return {};
-        }
-
         ProfileEvents ret;
-        if (!ReadBlock(*input_, &ret.block)) {
-            return {};
-        }
-
-        if (events_) {
-            events_->OnProfileEvents(ret.block);
+        if (!ReceiveProfileEvents(ret.block)) {
+            throw ProtocolError{"can't read profile events packet from input stream"};
         }
         return ret;
     }
 
     default:
         throw UnimplementedError("unimplemented " + std::to_string((int)packet_type));
-        break;
     }
 }
 
@@ -839,7 +777,9 @@ bool Client::Impl::ProcessPacket(uint64_t* server_packet) {
     auto packet = ReceivePacket(server_packet);
     switch (packet.index()) {
     case VariantIndex<ServerError, decltype(packet)>():
-    case VariantIndex<std::monostate, decltype(packet)>():
+        // Normally `ReceivePacket()` throws on server exceptions, but it can be
+        // suppressed by `ClientOptions::SetRethrowException`. In that case the
+        // error marks the end of the response.
     case VariantIndex<EndOfStream, decltype(packet)>():
         return false;
     default:
@@ -956,29 +896,97 @@ bool Client::Impl::ReceiveData(Block & block) {
     return true;
 }
 
-bool Client::Impl::ReceiveException(bool rethrow, ServerError * error) {
+bool Client::Impl::ReceiveException(ServerError & error) {
     std::shared_ptr<Exception> e(new Exception);
     bool has_nested = false; // obsolete: https://github.com/ClickHouse/ClickHouse/blob/ef11941cf5a/src/IO/ReadHelpers.cpp#L2017
 
-    bool exception_received =
-        WireFormat::ReadFixed(*input_, &e->code)
-        && WireFormat::ReadString(*input_, &e->name)
-        && WireFormat::ReadString(*input_, &e->display_text)
-        && WireFormat::ReadString(*input_, &e->stack_trace)
-        && WireFormat::ReadFixed(*input_, &has_nested);
+    if (!WireFormat::ReadFixed(*input_, &e->code) ||
+        !WireFormat::ReadString(*input_, &e->name) ||
+        !WireFormat::ReadString(*input_, &e->display_text) ||
+        !WireFormat::ReadString(*input_, &e->stack_trace) ||
+        !WireFormat::ReadFixed(*input_, &has_nested)) {
+        return false;
+    }
 
     if (events_) {
         events_->OnServerException(*e);
     }
 
-    if (rethrow || options_.rethrow_exceptions) {
-        throw ServerError(e);
+    error = ServerError(e);
+
+    return true;
+}
+
+bool Client::Impl::ReceiveProfileInfo(Profile & profile) {
+    if (!WireFormat::ReadUInt64(*input_, &profile.rows) ||
+        !WireFormat::ReadUInt64(*input_, &profile.blocks) ||
+        !WireFormat::ReadUInt64(*input_, &profile.bytes) ||
+        !WireFormat::ReadFixed(*input_, &profile.applied_limit) ||
+        !WireFormat::ReadUInt64(*input_, &profile.rows_before_limit) ||
+        !WireFormat::ReadFixed(*input_, &profile.calculated_rows_before_limit)) {
+        return false;
     }
 
-    if (exception_received && error != nullptr) {
-        *error = ServerError(e);
+    if (events_) {
+        events_->OnProfile(profile);
     }
-    return exception_received;
+
+    return true;
+}
+
+bool Client::Impl::ReceiveProgress(Progress & progress) {
+    if (!WireFormat::ReadUInt64(*input_, &progress.rows) ||
+        !WireFormat::ReadUInt64(*input_, &progress.bytes)) {
+        return false;
+    }
+
+    if constexpr(DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS) {
+        if (!WireFormat::ReadUInt64(*input_, &progress.total_rows)) {
+            return false;
+        }
+    }
+    if (server_info_.revision >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
+    {
+        if (!WireFormat::ReadUInt64(*input_, &progress.written_rows) ||
+            !WireFormat::ReadUInt64(*input_, &progress.written_bytes)) {
+            return false;
+        }
+    }
+
+    if (events_) {
+        events_->OnProgress(progress);
+    }
+
+    return true;
+}
+
+bool Client::Impl::ReceiveLog(Block & block) {
+    if (!WireFormat::SkipString(*input_) || // log tag
+        !ReadBlock(*input_, &block)) { // Use uncompressed stream since log blocks usually contain only one row
+        return false;
+    }
+    if (events_) {
+        events_->OnServerLog(block);
+    }
+    return true;
+}
+
+bool Client::Impl::ReceiveTableColumns() {
+    if (!WireFormat::SkipString(*input_) || // external table name
+        !WireFormat::SkipString(*input_)) { // columns metadata
+        return false;
+    }
+    return true;
+}
+
+bool Client::Impl::ReceiveProfileEvents(Block & block) {
+    if (!WireFormat::SkipString(*input_) || !ReadBlock(*input_, &block)) {
+        return false;
+    }
+    if (events_) {
+        events_->OnProfileEvents(block);
+    }
+    return true;
 }
 
 void Client::Impl::SendCancel() {
@@ -1223,8 +1231,11 @@ bool Client::Impl::ReceiveHello() {
 
         return true;
     } else if (packet_type == ServerCodes::Exception) {
-        ReceiveException(true);
-        return false;
+        ServerError ret{std::make_shared<Exception>()};
+        if (!ReceiveException(ret)) {
+            throw ProtocolError{"server rejected the connection, but its exception packet could not be decoded"};
+        }
+        throw ret;
     }
 
     return false;
@@ -1232,32 +1243,36 @@ bool Client::Impl::ReceiveHello() {
 
 void Client::Impl::RetryGuard(std::function<void()> func) {
 
-    if (current_endpoint_)
-    {
-        for (unsigned int i = 0; ; ++i) {
-            try {
-                func();
-                return;
-            } catch (const std::system_error&) {
-                bool ok = true;
-
-                try {
-                    socket_factory_->sleepFor(options_.retry_timeout);
-                    ResetConnection();
-                } catch (...) {
-                    ok = false;
-                }
-
-                if (!ok && i == options_.send_retries) {
-                    break;
-                }
+    for (unsigned int i = 1; ; ++i) {
+        try {
+            func();
+            return;
+        } catch (const std::system_error&) {
+            // if send_retries == 0 do not try anymore, throw right away
+            if (options_.send_retries == 0) {
+                throw;
             }
+
+            // If `send_retries` attempts failed, try other endpoints
+            if (i >= options_.send_retries) {
+                break;
+            }
+
+            // otherwise sleep and try again
+            try {
+                socket_factory_->sleepFor(options_.retry_timeout);
+                ResetConnection();
+            } catch (const std::system_error&) {
+            }
+
         }
     }
+
     // Connections with current_endpoint_ are broken.
-    // Trying to establish  with the another one from the list.
-    size_t connection_attempts_count = GetConnectionAttempts();
-    for (size_t i = 0; i < connection_attempts_count;)
+    // Trying to establish with another one from the list.
+    size_t connection_attempts_count = options_.endpoints.size() * options_.send_retries;
+    std::optional<Endpoint> last_endpoint = current_endpoint_;
+    for (size_t i = 1; ; ++i)
     {
         try
         {
@@ -1267,11 +1282,14 @@ void Client::Impl::RetryGuard(std::function<void()> func) {
             func();
             return;
         } catch (const std::system_error&) {
-            if (++i == connection_attempts_count)
+            if (i >= connection_attempts_count)
             {
-                current_endpoint_.reset();
+                current_endpoint_ = last_endpoint;
                 throw;
             }
+        } catch (...) {
+            current_endpoint_ = last_endpoint;
+            throw;
         }
     }
 }
@@ -1415,9 +1433,15 @@ void Client::ResetConnectionEndpoint() {
     impl_->ResetConnectionEndpoint();
 }
 
+#if CH_NON_OPTIONAL_CURRENT_ENDPOINT
+Endpoint Client::GetCurrentEndpoint() const {
+    return impl_->GetCurrentEndpoint().value();
+}
+#else
 const std::optional<Endpoint>& Client::GetCurrentEndpoint() const {
     return impl_->GetCurrentEndpoint();
 }
+#endif
 
 const ServerInfo& Client::GetServerInfo() const {
     return impl_->GetServerInfo();
