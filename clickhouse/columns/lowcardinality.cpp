@@ -114,6 +114,9 @@ inline size_t FixedSizeForDictionaryType(Type::Code code) {
         case Type::IPv6:
         case Type::UUID:
             return 16;
+        case Type::Int256:
+        case Type::UInt256:
+            return 32;
         default:
             return 0;
     }
@@ -123,7 +126,7 @@ inline size_t FixedSizeForDictionaryType(Type::Code code) {
 // backing buffer is static so the non-owning view stays valid.
 inline ItemView ZeroItemForDictionary(Type::Code code) {
     if (const auto size = FixedSizeForDictionaryType(code)) {
-        static const char zeros[16] = {};
+        static const char zeros[32] = {};
         if (size > sizeof(zeros)) {
             throw AssertionError("The size of item view for ColumnLowCardinality exceeds the buffer size");
         }
@@ -216,6 +219,12 @@ inline void AppendToDictionary(Column& dictionary, const ItemView & item) {
             return;
         case Type::UInt128:
             column_down_cast<ColumnUInt128>(dictionary).Append(item.get<UInt128>());
+            return;
+        case Type::Int256:
+            column_down_cast<ColumnInt256>(dictionary).Append(item.get<Int256>());
+            return;
+        case Type::UInt256:
+            column_down_cast<ColumnUInt256>(dictionary).Append(item.get<UInt256>());
             return;
         case Type::Float32:
             column_down_cast<ColumnFloat32>(dictionary).Append(item.get<float>());

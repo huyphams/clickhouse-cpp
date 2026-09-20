@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include "clickhouse/types/types.h"
+#include "clickhouse/types/type_utils.h"
 #include "clickhouse/base/bignum_string.h"
 
 namespace {
@@ -421,7 +422,7 @@ std::ostream& operator<<(std::ostream& ostr, const ItemView& item_view) {
             break;
         case Type::UUID: {
             const auto & uuid_vals = reinterpret_cast<const uint64_t*>(item_view.data.data());
-            ostr << ToString(clickhouse::UUID{uuid_vals[0], uuid_vals[1]});
+            ostr << ::ToString(clickhouse::UUID{uuid_vals[0], uuid_vals[1]});
             break;
         }
         case Type::IPv4: {
@@ -439,6 +440,13 @@ std::ostream& operator<<(std::ostream& ostr, const ItemView& item_view) {
         case Type::UInt128:
             ostr << item_view.get<UInt128>();
             break;
+        case Type::Int256:
+        case Type::Decimal256:
+            ostr << clickhouse::ToString(item_view.get<Int256>());
+            break;
+        case Type::UInt256:
+            ostr << clickhouse::ToString(item_view.get<UInt256>());
+            break;
         case Type::Decimal: {
             if (item_view.data.size() == sizeof(int32_t)) {
                 ostr << item_view.get<int32_t>();
@@ -448,6 +456,9 @@ std::ostream& operator<<(std::ostream& ostr, const ItemView& item_view) {
             }
             else if (item_view.data.size() == sizeof(Int128)) {
                 ostr << item_view.get<Int128>();
+            }
+            else if (item_view.data.size() == sizeof(Int256)) {
+                ostr << clickhouse::ToString(item_view.get<Int256>());
             }
             else {
                 throw std::runtime_error("Invalid data size of ItemView of type Decimal");

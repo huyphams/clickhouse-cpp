@@ -2,6 +2,8 @@ SET ( clickhouse-cpp-ut-src
     main.cpp
 
     bignum_string_ut.cpp
+    wide256_ut.cpp
+    wide256_odr_ut.cpp
     bignum_ut.cpp
     bignum_round_trip.cpp
     block_ut.cpp
